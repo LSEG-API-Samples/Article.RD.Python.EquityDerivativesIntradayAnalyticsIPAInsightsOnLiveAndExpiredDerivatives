@@ -54,7 +54,23 @@ class get_options_RIC():
         return None
 
 
-    def _get_exchange_code(self, asset):
+    def _get_exchange_code(
+        self,
+        asset):
+        """
+        This function retrieves the exchange code for a given equity option.
+        The exchange code is determined by the specific characteristics of the asset, which
+        may include its market type, geographical location, or other defining attributes.
+        These attributes are gathered via LSEG Data.
+
+        Parameters
+        -----------------------------------------------
+        Inputs:
+            - asset (str): The identifier for the asset for which the exchange code is required.
+
+        Output/Returns:
+            - list[str]: The exchange codes associated with the asset.
+        """
 
         response = rd.discovery.search(
             query = asset,
@@ -72,7 +88,13 @@ class get_options_RIC():
         return exchange_codes
 
 
-    def _get_exp_month(self, maturity, opt_type, strike = None, opra=False):
+    def _get_exp_month(
+        self,
+        maturity,
+        opt_type,
+        strike=None,
+        opra=False):
+        
 
         maturity = pd.to_datetime(maturity)
         # define option expiration identifiers
@@ -455,7 +477,7 @@ class IPA_Equity_Vola_n_Greeeks():
             maturity_format = '%Y-%m-%d', # e.g.: '%Y-%m-%d', '%Y-%m-%d %H:%M:%S' or '%Y-%m-%dT%H:%M:%SZ'
             option_type = 'Call', # 'Put'
             buy_sell = 'Buy', # 'Sell'
-            data_retrieval_interval = rd.content.historical_pricing.Intervals.THIRTY_MINUTES,
+            data_retrieval_interval = rd.content.historical_pricing.Intervals.HOURLY,
             curr = 'USD',
             exercise_style = 'EURO',
             option_price_side = None, # `None`, `'Bid'` or `'Ask'`.
@@ -596,6 +618,11 @@ class IPA_Equity_Vola_n_Greeeks():
             # Below, we will pick the field (if it has data) in this order:
             fields_lst = ['TRDPRC_1', 'SETTLE', 'BID', 'ASK']
         else:
+            if self.debug:
+                print("self.option_price_side")
+                print(self.option_price_side)
+                print("self.option_price_side.upper())]:")
+                print(self.option_price_side.upper())
             fields_lst = [str(self.option_price_side.upper())]
         if self.debug:
             print(f"optn_mrkt_pr_gmt = rd.content.historical_pricing.summaries.Definition(universe='{undrlying_optn_ric}',start='{sdate}',end='{edate}',interval='{self.data_retrieval_interval}',fields={fields_lst}).get_data().data.df")
@@ -607,17 +634,28 @@ class IPA_Equity_Vola_n_Greeeks():
                 fields=fields_lst
                 ).get_data().data.df
         if 'TRDPRC_1' in optn_mrkt_pr_gmt.columns:
-            optn_mrkt_pr_gmt = pd.DataFrame(
-                data={'TRDPRC_1': optn_mrkt_pr_gmt.TRDPRC_1}).dropna()
+            if len(optn_mrkt_pr_gmt.TRDPRC_1.dropna()) > 0:
+                optn_mrkt_pr_gmt = pd.DataFrame(
+                    data={'TRDPRC_1': optn_mrkt_pr_gmt.TRDPRC_1}).dropna()
         elif 'SETTLE' in optn_mrkt_pr_gmt.columns:
-            optn_mrkt_pr_gmt = pd.DataFrame(
-                data={'SETTLE': optn_mrkt_pr_gmt.SETTLE}).dropna()
+            if len(optn_mrkt_pr_gmt.SETTLE.dropna()) > 0:
+                optn_mrkt_pr_gmt = pd.DataFrame(
+                    data={'SETTLE': optn_mrkt_pr_gmt.SETTLE}).dropna()
         elif 'BID' in optn_mrkt_pr_gmt.columns:
-            optn_mrkt_pr_gmt = pd.DataFrame(
-                data={'BID': optn_mrkt_pr_gmt.BID}).dropna()
+            if len(optn_mrkt_pr_gmt.BID.dropna()) > 0:
+                optn_mrkt_pr_gmt = pd.DataFrame(
+                    data={'BID': optn_mrkt_pr_gmt.BID}).dropna()
+        else:
+            display(optn_mrkt_pr_gmt)
+            raise ValueError("Issue with `optn_mrkt_pr_gmt`, as displayed above.")
         optn_mrkt_pr_gmt.columns.name = undrlying_optn_ric
 
-        optn_mrkt_pr_field = optn_mrkt_pr_gmt.columns[0]
+        column_with_fewest_nas = optn_mrkt_pr_gmt.isna().sum().idxmin()
+        if self.debug:
+            print("column_with_fewest_nas:")
+            print(column_with_fewest_nas)
+
+        optn_mrkt_pr_field = column_with_fewest_nas
         df_strt_dt = optn_mrkt_pr_gmt.index[0]
         df_strt_dt_str = df_strt_dt.strftime('%Y-%m-%dT%H:%M:%S.%f')
         df_end_dt = optn_mrkt_pr_gmt.index[-1]
@@ -748,7 +786,7 @@ class IPA_Equity_Vola_n_Greeeks():
             print("self.optn_mrkt_pr_gmt.groupby(self.optn_mrkt_pr_gmt.index.date).count().values")
             display(self.optn_mrkt_pr_gmt.groupby(self.optn_mrkt_pr_gmt.index.date).count().values)
 
-        if max(self.optn_mrkt_pr_gmt.groupby(self.optn_mrkt_pr_gmt.index.date).count().values)[0] == 1:
+        if np.amax(self.optn_mrkt_pr_gmt.groupby(self.optn_mrkt_pr_gmt.index.date).count().values) == 1:
             raise(MyException(ExceptionData("This function only allows intraday data for now. Only interday data was returned. This may be due to illiquid Options Trading. You may want to ask only for 'Bid' or 'Ask' data as opposed to 'Let Program Choose', if you have not made that choice already, as the latter will prioritise executed trades, of which there may be few.")))
 
         _df_gmt = self.df_gmt.copy()
@@ -831,6 +869,32 @@ class IPA_Equity_Vola_n_Greeeks():
                     underlying_time_stamp=self.underlying_time_stamp))
             for i_int in range(len(self.df_gmt_no_na))]
         
+        ipa_univ_requ_debug = [ # For debugging.
+            {"strike": float(self.strike),
+             "buy_sell": self.buy_sell,
+             "underlying_type": rd.content.ipa.financial_contracts.option.UnderlyingType.ETI,
+             "call_put": self.option_type,
+             "exercise_style": self.exercise_style,
+             "end_date": datetime.strptime(self.maturity, self.maturity_format).strftime('%Y-%m-%dT%H:%M:%SZ'),  # '%Y-%m-%dT%H:%M:%SZ' for RD version 1.2.0 # self.maturity.strftime('%Y-%m-%dt%H:%M:%Sz') # datetime.strptime(self.maturity, '%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%dt%H:%M:%Sz')
+             "lot_size": 1,
+             "deal_contract": 1,
+             "time_zone_offset": 0,
+             "underlying_definition": {"instrument_code": self.underlying},
+             "pricing_parameters": {
+                 "valuation_date": self.df_gmt_no_na.index[i_int].strftime('%Y-%m-%dT%H:%M:%SZ'), # '%Y-%m-%dT%H:%M:%SZ' for RD version 1.2.0 # '%Y-%m-%dt%H:%M:%Sz' # One version of rd wanted capitals, the other small. Here they are if you want to copy paste.
+                 "report_ccy": self.curr,
+                 "market_value_in_deal_ccy": float(
+                     self.df_gmt_no_na[self.optn_mrkt_pr_field][i_int]),#
+                 "pricing_model_type": 'BlackScholes',
+                 "risk_free_rate_percent": float(self.df_gmt_no_na['RfRatePrct'][i_int]),
+                 "underlying_price": float(
+                     self.df_gmt_no_na[self.underlying_pr_field][i_int]),
+                 "volatility_type": 'Implied',
+                 "option_price_side": self.option_price_side_for_IPA,
+                 "underlying_time_stamp": self.underlying_time_stamp}}
+            for i_int in range(len(self.df_gmt_no_na))]
+        ipa_univ_requ_debug_buckets = [i_rdf_bd_dbg for i_rdf_bd_dbg in [ipa_univ_requ_debug[j_int:j_int+self.search_batch_max] for j_int in range(0, len(ipa_univ_requ_debug), self.search_batch_max)]] # For debugging.
+        
         for i_str in ["ErrorMessage", "MarketValueInDealCcy", "RiskFreeRatePercent", "UnderlyingPrice", "Volatility"][::-1]: # We would like to keep a minimum of these fields in the Search Responce in order to construct following graphs.
             request_fields = [i_str] + self.request_fields
         i_int = 0
@@ -847,14 +911,27 @@ class IPA_Equity_Vola_n_Greeeks():
         if no_of_ipa_calls > 100 or self.debug:
             print(f"There are {no_of_ipa_calls} to make. This may take a long while. If this is too long, please consider changing the `IPA_Equity_Vola_n_Greeeks` argument from {self.data_retrieval_interval} to a longer interval")
         
-        for i_rdf_bd in [ipa_univ_requ[j_int:j_int+self.search_batch_max] for j_int in range(0, len(ipa_univ_requ), self.search_batch_max)]:  # This list chunks our `ipa_univ_requ` in batches of `search_batch_max`
-            try:  # One issue we may encounter here is that the field 'ErrorMessage' in `request_fields` may break the `get_data()` call and therefore the for loop. we may therefore have to remove 'ErrorMessage' in the call; ironically when it is most useful.
-                ipa_df_get_data_return = rd.content.ipa.financial_contracts.Definitions(
-                    universe=i_rdf_bd, fields=request_fields).get_data()
-            except:  # https://stackoverflow.com/questions/11520492/difference-between-del-remove-and-pop-on-lists
+        for enum, i_rdf_bd in enumerate([ipa_univ_requ[j_int:j_int+self.search_batch_max] for j_int in range(0, len(ipa_univ_requ), self.search_batch_max)]):  # This list chunks our `ipa_univ_requ` in batches of `search_batch_max`
+
+            # IPA may sometimes come back to us saying that Implied VOlatilities cannot be computed. This can happen sometimes due to extreme Moneyness and closeness to expiration. To investigate these issues, we create this 1st try loop:
+            try:
+                try:  # One issue we may encounter here is that the field 'ErrorMessage' in `request_fields` may break the `get_data()` call and therefore the for loop. we may therefore have to remove 'ErrorMessage' in the call; ironically when it is most useful.
+                    ipa_df_get_data_return = rd.content.ipa.financial_contracts.Definitions(
+                        universe=i_rdf_bd, fields=request_fields).get_data()
+                except:  # https://stackoverflow.com/questions/11520492/difference-between-del-remove-and-pop-on-lists
+                    _request_fields.remove('ErrorMessage')
+                    ipa_df_get_data_return = rd.content.ipa.financial_contracts.Definitions(
+                        universe=i_rdf_bd, fields=request_fields).get_data()
+            except:
+                if self.debug:
+                    print("request_fields")
+                    print(request_fields)
+                    print(f"ipa_univ_requ_debug_buckets[{enum}]")
+                    display(ipa_univ_requ_debug_buckets[enum])
                 _request_fields.remove('ErrorMessage')
                 ipa_df_get_data_return = rd.content.ipa.financial_contracts.Definitions(
                     universe=i_rdf_bd, fields=request_fields).get_data()
+
             _ipa_df_gmt_no_na = ipa_df_get_data_return.data.df
             if i_int == 0:
                 ipa_df_gmt_no_na = _ipa_df_gmt_no_na.drop("ErrorMessage", axis=1) # We only keep "ErrorMessage" for debugging in self._IPA_df.
@@ -869,7 +946,7 @@ class IPA_Equity_Vola_n_Greeeks():
             if not self.debug and no_of_ipa_calls > 100:
                 print(i_int)
 
-        if ipa_df_gmt_no_na:
+        if self.debug and len(ipa_df_gmt_no_na) > 0:
             print("ipa_df_gmt_no_na 1st:")
             display(ipa_df_gmt_no_na)
 
@@ -882,7 +959,8 @@ class IPA_Equity_Vola_n_Greeeks():
             import warnings
             warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
             # Now add the new column for correnation
-            corr_df = pd.to_numeric(self.df['OptionPrice'].ffill().rolling(window=63).corr(self.df['Volatility'].ffill()))
+            corr_df = self.df['OptionPrice'].ffill().rolling(window=63).corr(self.df['Volatility'].ffill())
+            # corr_df = pd.to_numeric(self.df['OptionPrice'].ffill().rolling(window=63).corr(self.df['Volatility'].ffill()))
             self.df['3M(63WorkDay)MovCorr(StkprImpvola)'] = corr_df
         if self.hist_vol:
             # Resample data to daily frequency by taking the mean of intraday data
